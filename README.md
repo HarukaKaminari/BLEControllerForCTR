@@ -1,69 +1,53 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- |
+# BLEControllerForCTR
 
-# Blink Example
+This repository provides a small ESP-IDF-based BLE OTA controller demo that keeps the wireless firmware update path separated from the normal application runtime.
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+The design is intentionally modular:
 
-This example demonstrates how to blink a LED by using the GPIO driver or using the [led_strip](https://components.espressif.com/component/espressif/led_strip) library if the LED is addressable e.g. [WS2812](https://cdn-shop.adafruit.com/datasheets/WS2812B.pdf). The `led_strip` library is installed via [component manager](main/idf_component.yml).
+- [main/blink_example_main.c](main/blink_example_main.c) keeps the application entrypoint and LED runtime logic lightweight.
+- [main/ble_ota.c](main/ble_ota.c) implements the BLE transport, GATT service, OTA command/data parsing, and the partition commit path.
+- [main/ble_ota.h](main/ble_ota.h) exposes the public OTA module interface.
 
-## How to Use Example
+## Project Goal
 
-Before project configuration and build, be sure to set the correct chip target using `idf.py set-target <chip_name>`.
+The firmware is structured to support a BLE-based remote firmware update flow on ESP32-class devices, with the OTA implementation isolated in a dedicated module rather than embedded directly inside the entrypoint.
 
-### Hardware Required
+## Repository Layout
 
-* A development board with normal LED or addressable LED on-board (e.g., ESP32-S3-DevKitC, ESP32-C6-DevKitC etc.)
-* A USB cable for Power supply and programming
+- [CMakeLists.txt](CMakeLists.txt) — top-level ESP-IDF project configuration
+- [partitions.csv](partitions.csv) — OTA-capable partition table
+- [main/CMakeLists.txt](main/CMakeLists.txt) — main component source registration
+- [main/ble_ota.c](main/ble_ota.c) — BLE OTA service implementation
+- [main/ble_ota.h](main/ble_ota.h) — OTA module public API
+- [main/blink_example_main.c](main/blink_example_main.c) — LED runtime entrypoint
+- [sdkconfig.defaults](sdkconfig.defaults) — default project configuration
 
-See [Development Boards](https://www.espressif.com/en/products/devkits) for more information about it.
+## Hardware Notes
 
-### Configure the Project
+This project targets ESP-IDF-based development boards with a BLE-capable controller and a visible LED output. The OTA transport is implemented using a custom GATT service, so a compatible BLE host is needed to send OTA command/data packets to the device.
 
-Open the project configuration menu (`idf.py menuconfig`).
+## Build
 
-In the `Example Configuration` menu:
+Use the standard ESP-IDF workflow:
 
-* Select the LED type in the `Blink LED type` option.
-  * Use `GPIO` for regular LED
-  * Use `LED strip` for addressable LED
-* If the LED type is `LED strip`, select the backend peripheral
-  * `RMT` is only available for ESP targets with RMT peripheral supported
-  * `SPI` is available for all ESP targets
-* Set the GPIO number used for the signal in the `Blink GPIO number` option.
-* Set the blinking period in the `Blink period in ms` option.
-
-### Build and Flash
-
-Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html) for full steps to configure and use ESP-IDF to build projects.
-
-## Example Output
-
-As you run the example, you will see the LED blinking, according to the previously defined period. For the addressable LED, you can also change the LED color by setting the `led_strip_set_pixel(led_strip, 0, 16, 16, 16);` (LED Strip, Pixel Number, Red, Green, Blue) with values from 0 to 255 in the [source file](main/blink_example_main.c).
-
-```text
-I (315) example: Example configured to blink addressable LED!
-I (325) example: Turning the LED OFF!
-I (1325) example: Turning the LED ON!
-I (2325) example: Turning the LED OFF!
-I (3325) example: Turning the LED ON!
-I (4325) example: Turning the LED OFF!
-I (5325) example: Turning the LED ON!
-I (6325) example: Turning the LED OFF!
-I (7325) example: Turning the LED ON!
-I (8325) example: Turning the LED OFF!
+```powershell
+idf.py set-target esp32s3
+idf.py build
+idf.py -p <PORT> flash monitor
 ```
 
-Note: The color order could be different according to the LED model.
+If you are working in a clean shell, make sure the ESP-IDF environment has been exported first.
 
-The pixel number indicates the pixel position in the LED strip. For a single LED, use 0.
+## OTA Protocol Summary
 
-## Troubleshooting
+A custom BLE service is exposed with the following logical layout:
 
-* If the LED isn't blinking, check the GPIO or the LED type selection in the `Example Configuration` menu.
+- Command characteristic: start / commit / abort OTA transaction
+- Data characteristic: receive firmware image chunks
+- Status characteristic: report operation progress back to the host
 
-For any technical queries, please open an [issue](https://github.com/espressif/esp-idf/issues) on GitHub. We will get back to you soon.
+## Notes
+
+This repository is oriented toward a maintainable firmware structure, not a monolithic single-file entrypoint implementation.
+
+The build output and local IDE cache should remain outside the Git working tree, which is why the repository ignores generated ESP-IDF artifacts and editor workspace metadata.
