@@ -6,12 +6,14 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
+#include "esp_gatt_common_api.h"
 #include "esp_gatt_defs.h"
 #include "esp_gatts_api.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "nvs_flash.h"
 #include "ble_ota.h"
+#include "status_led.h"
 
 /*
  * ble_ota.c
@@ -85,6 +87,7 @@ static uint16_t s_status_char_handle = 0;
  * state machine and from the callback layer, not from the main application.
  */
 static esp_gatt_if_t s_gatts_if = ESP_GATT_IF_NONE;
+static uint16_t s_conn_id = 0;
 
 /*
  * OTA state variables.
@@ -139,7 +142,7 @@ static void notify_status(const char *message)
         return;
     }
 
-    esp_ble_gatts_send_indicate(s_gatts_if, s_status_char_handle,
+    esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_status_char_handle,
                                 strlen(message), (uint8_t *)message,
                                 false);
 }
@@ -188,11 +191,11 @@ static void start_ota_upload(size_t image_size)
     if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
         target = esp_partition_find_first(ESP_PARTITION_TYPE_APP,
                                            ESP_PARTITION_SUBTYPE_APP_OTA_1,
-                                           &target);
+                                           NULL);
     } else {
         target = esp_partition_find_first(ESP_PARTITION_TYPE_APP,
                                            ESP_PARTITION_SUBTYPE_APP_OTA_0,
-                                           &target);
+                                           NULL);
     }
 
     if (target == NULL) {
@@ -258,18 +261,23 @@ static void process_command(const uint8_t *data, uint16_t length)
             reset_ota_ctx();
             return;
         }
+        status_led_set(STATUS_LED_UPDATE);
+        vTaskDelay(pdMS_TO_TICKS(100));
         if (esp_ota_end(s_ota_handle) != ESP_OK) {
+            status_led_set(STATUS_LED_YELLOW);
             notify_status("COM:ERR END");
             reset_ota_ctx();
             return;
         }
         if (esp_ota_set_boot_partition(s_target_partition) != ESP_OK) {
+            status_led_set(STATUS_LED_YELLOW);
             notify_status("COM:ERR BOOT");
             reset_ota_ctx();
             return;
         }
         notify_status("COM:OK REBOOT");
-        vTaskDelay(pdMS_TO_TICKS(100));
+        status_led_set(STATUS_LED_BLUE);
+        vTaskDelay(pdMS_TO_TICKS(300));
         esp_restart();
         break;
     case OTA_CMD_ABORT:
@@ -313,6 +321,11 @@ static void process_data(const uint8_t *data, uint16_t length)
     }
 
     s_image_bytes_received += length;
+    if (s_image_bytes_received == s_image_size) {
+        status_led_set(STATUS_LED_GREEN);
+    } else {
+        status_led_set(STATUS_LED_DATA);
+    }
     char status[48];
     snprintf(status, sizeof(status), "DAT:OK %u", (unsigned int)s_image_bytes_received);
     notify_status(status);
@@ -371,17 +384,23 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     case ESP_GATTS_REG_EVT:
         s_gatts_if = gatts_if;
         {
-            esp_ble_uuid_t service_uuid = {
-                .len = ESP_UUID_LEN_16,
-                .uuid.uuid16 = OTA_SERVICE_UUID,
+            esp_gatt_srvc_id_t service_id = {
+                .id = {
+                    .uuid = {
+                        .len = ESP_UUID_LEN_16,
+                        .uuid.uuid16 = OTA_SERVICE_UUID,
+                    },
+                    .inst_id = 0,
+                },
+                .is_primary = true,
             };
-            esp_ble_gatts_create_service(gatts_if, &service_uuid, 7);
+            esp_ble_gatts_create_service(gatts_if, &service_id, 7);
         }
         break;
     case ESP_GATTS_CREATE_EVT:
         s_service_handle = param->create.service_handle;
         {
-            esp_ble_uuid_t char_uuid = {
+            esp_bt_uuid_t char_uuid = {
                 .len = ESP_UUID_LEN_16,
                 .uuid.uuid16 = OTA_CMD_CHAR_UUID,
             };
@@ -405,19 +424,23 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         esp_ble_gatts_start_service(s_service_handle);
         break;
     case ESP_GATTS_ADD_CHAR_EVT:
-        if (param->add_char.uuid.uuid.uuid16 == OTA_CMD_CHAR_UUID) {
+        if (param->add_char.char_uuid.uuid.uuid16 == OTA_CMD_CHAR_UUID) {
             s_cmd_char_handle = param->add_char.attr_handle;
-        } else if (param->add_char.uuid.uuid.uuid16 == OTA_DATA_CHAR_UUID) {
+        } else if (param->add_char.char_uuid.uuid.uuid16 == OTA_DATA_CHAR_UUID) {
             s_data_char_handle = param->add_char.attr_handle;
-        } else if (param->add_char.uuid.uuid.uuid16 == OTA_STATUS_CHAR_UUID) {
+        } else if (param->add_char.char_uuid.uuid.uuid16 == OTA_STATUS_CHAR_UUID) {
             s_status_char_handle = param->add_char.attr_handle;
         }
         break;
     case ESP_GATTS_CONNECT_EVT:
+        status_led_set(STATUS_LED_YELLOW);
+        s_conn_id = param->connect.conn_id;
         memcpy(s_connected_bda, param->connect.remote_bda, sizeof(s_connected_bda));
         ESP_LOGI(TAG, "BLE connected");
         break;
     case ESP_GATTS_DISCONNECT_EVT:
+        status_led_set(STATUS_LED_BLUE);
+        s_conn_id = 0;
         memset(s_connected_bda, 0, sizeof(s_connected_bda));
         ESP_LOGI(TAG, "BLE disconnected");
         break;
@@ -466,9 +489,9 @@ void ble_ota_init(void)
     ESP_ERROR_CHECK(esp_ble_gatts_app_register(APP_ID));
     ESP_ERROR_CHECK(esp_ble_gap_set_device_name("ESP32-BLINK-OTA"));
 
-    esp_ble_uuid_t adv_uuid = {
-        .len = ESP_UUID_LEN_16,
-        .uuid.uuid16 = OTA_SERVICE_UUID,
+    uint8_t adv_service_uuid[] = {
+        (uint8_t)(OTA_SERVICE_UUID & 0xFF),
+        (uint8_t)(OTA_SERVICE_UUID >> 8),
     };
 
     ESP_ERROR_CHECK(esp_ble_gap_config_adv_data(&(esp_ble_adv_data_t){
@@ -479,8 +502,8 @@ void ble_ota_init(void)
         .max_interval = 0x40,
         .appearance = 0x00,
         .flag = 0x06,
-        .service_uuid_len = sizeof(adv_uuid.uuid.uuid16),
-        .p_service_uuid = &adv_uuid,
+        .service_uuid_len = sizeof(adv_service_uuid),
+        .p_service_uuid = adv_service_uuid,
     }));
 
     ESP_ERROR_CHECK(esp_ble_gatt_set_local_mtu(500));
@@ -537,6 +560,7 @@ void ble_ota_deinit(void)
     s_cmd_char_handle = 0;
     s_data_char_handle = 0;
     s_status_char_handle = 0;
+    s_conn_id = 0;
 
     esp_bluedroid_disable();
     esp_bluedroid_deinit();

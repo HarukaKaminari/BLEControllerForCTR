@@ -1,34 +1,25 @@
 # BLEControllerForCTR
 
-This repository provides a small ESP-IDF-based BLE OTA controller demo that keeps the wireless firmware update path separated from the normal application runtime.
+This repository is a single-target ESP-IDF firmware project for the ESP32-S3 platform. The application keeps BLE OTA transport logic in a dedicated module instead of embedding it in the main entrypoint.
 
-The design is intentionally modular:
+## Project structure
 
-- [main/blink_example_main.c](main/blink_example_main.c) keeps the application entrypoint and LED runtime logic lightweight.
-- [main/ble_ota.c](main/ble_ota.c) implements the BLE transport, GATT service, OTA command/data parsing, and the partition commit path.
-- [main/ble_ota.h](main/ble_ota.h) exposes the public OTA module interface.
+- [main/blink_example_main.c](main/blink_example_main.c) — lightweight application entrypoint and startup orchestration.
+- [main/ble_ota.c](main/ble_ota.c) — BLE GATT OTA service implementation, protocol handling, and OTA commit path.
+- [main/ble_ota.h](main/ble_ota.h) — public OTA API exposed to the entrypoint.
+- [main/status_led.c](main/status_led.c) — independent RGB status indicator implementation.
+- [main/status_led.h](main/status_led.h) — single public status-setting interface.
+- [partitions.csv](partitions.csv) — two-slot OTA partition layout used by the firmware update flow.
+- [sdkconfig.defaults](sdkconfig.defaults) — base project defaults.
+- [sdkconfig.defaults.esp32s3](sdkconfig.defaults.esp32s3) — ESP32-S3-specific board defaults.
 
-## Project Goal
+## Scope
 
-The firmware is structured to support a BLE-based remote firmware update flow on ESP32-class devices, with the OTA implementation isolated in a dedicated module rather than embedded directly inside the entrypoint.
-
-## Repository Layout
-
-- [CMakeLists.txt](CMakeLists.txt) — top-level ESP-IDF project configuration
-- [partitions.csv](partitions.csv) — OTA-capable partition table
-- [main/CMakeLists.txt](main/CMakeLists.txt) — main component source registration
-- [main/ble_ota.c](main/ble_ota.c) — BLE OTA service implementation
-- [main/ble_ota.h](main/ble_ota.h) — OTA module public API
-- [main/blink_example_main.c](main/blink_example_main.c) — LED runtime entrypoint
-- [sdkconfig.defaults](sdkconfig.defaults) — default project configuration
-
-## Hardware Notes
-
-This project targets ESP-IDF-based development boards with a BLE-capable controller and a visible LED output. The OTA transport is implemented using a custom GATT service, so a compatible BLE host is needed to send OTA command/data packets to the device.
+This repository is intentionally limited to the ESP32-S3 target only. It is not designed to be a cross-platform firmware tree or a generic multi-chip demo.
 
 ## Build
 
-Use the standard ESP-IDF workflow:
+Use the standard ESP-IDF workflow for this board target:
 
 ```powershell
 idf.py set-target esp32s3
@@ -36,18 +27,34 @@ idf.py build
 idf.py -p <PORT> flash monitor
 ```
 
-If you are working in a clean shell, make sure the ESP-IDF environment has been exported first.
+## OTA protocol summary
 
-## OTA Protocol Summary
+The firmware exposes a custom BLE service with:
 
-A custom BLE service is exposed with the following logical layout:
+- a command characteristic for `START`, `COMMIT`, and `ABORT`
+- a data characteristic for incoming firmware chunks
+- a status characteristic for transaction feedback
 
-- Command characteristic: start / commit / abort OTA transaction
-- Data characteristic: receive firmware image chunks
-- Status characteristic: report operation progress back to the host
+## RGB status indication
+
+The addressable RGB LED is driven on `CONFIG_BLINK_GPIO` (GPIO 38 by default)
+and is exclusively owned by the status LED module:
+
+- blue, solid: powered on and waiting;
+- yellow, solid: an Android BLE client is connected;
+- blue, fast blinking: firmware data is being received;
+- green, solid: the complete image has been received;
+- red, fast blinking: firmware update is being finalized;
+- blue, solid: update completed successfully, immediately before reboot.
+
+The module exposes `status_led_set()` for predefined states and
+`status_led_set_color()` for custom RGB values. Custom colors use the
+`0x00RRGGBB` format; `0xFFFFFFFF` is also interpreted as white, while `0` is
+off. A frequency of `0` means solid, a positive value specifies complete
+blink cycles per second, and a negative value turns the LED off. The module
+initializes the LED lazily and performs blinking internally.
 
 ## Notes
 
-This repository is oriented toward a maintainable firmware structure, not a monolithic single-file entrypoint implementation.
-
-The build output and local IDE cache should remain outside the Git working tree, which is why the repository ignores generated ESP-IDF artifacts and editor workspace metadata.
+- The OTA logic is intentionally isolated in a separate source module for maintainability.
+- Generated build output and editor-local metadata are kept outside the committed source tree.
