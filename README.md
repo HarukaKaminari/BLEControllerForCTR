@@ -4,9 +4,11 @@ This repository is a single-target ESP-IDF firmware project for the ESP32-S3 pla
 
 ## Project structure
 
-- [main/blink_example_main.c](main/blink_example_main.c) — lightweight application entrypoint and startup orchestration.
+- [main/main.c](main/main.c) — lightweight application entrypoint and startup orchestration.
 - [main/ble_ota.c](main/ble_ota.c) — BLE GATT OTA service implementation, protocol handling, and OTA commit path.
 - [main/ble_ota.h](main/ble_ota.h) — public OTA API exposed to the entrypoint.
+- [main/ble_central.c](main/ble_central.c) — normal-mode BLE HID controller scan and connection logic.
+- [main/ble_central.h](main/ble_central.h) — public central-mode startup API.
 - [main/status_led.c](main/status_led.c) — independent RGB status indicator implementation.
 - [main/status_led.h](main/status_led.h) — single public status-setting interface.
 - [partitions.csv](partitions.csv) — two-slot OTA partition layout used by the firmware update flow.
@@ -53,6 +55,23 @@ The module exposes `status_led_set()` for predefined states and
 off. A frequency of `0` means solid, a positive value specifies complete
 blink cycles per second, and a negative value turns the LED off. The module
 initializes the LED lazily and performs blinking internally.
+
+## Normal-mode controller connection
+
+When the OTA trigger is not held during startup, the firmware starts a BLE
+central role and scans for devices advertising the standard HID Service UUID
+`0x1812`. During scanning and connection establishment, the LED slowly blinks
+blue at `0.5 Hz`. After a successful GATT connection, it remains solid green.
+
+The total scan/connection deadline is 30 seconds. If no controller connection
+is established before the deadline, the firmware turns the LED off, shuts down
+the BLE stack, and enters deep sleep. No wake source is configured, so the
+device remains asleep until the next reset or power cycle. OTA mode remains
+available by holding the configured OTA trigger GPIO during startup.
+
+The current implementation establishes the BLE GATT connection but does not
+yet decode a controller-specific HID report protocol. HID report discovery and
+decoding depend on the exact controller model and its report descriptor.
 
 ## Notes
 

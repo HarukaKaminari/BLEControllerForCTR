@@ -1,6 +1,8 @@
 #ifndef BLE_OTA_H
 #define BLE_OTA_H
 
+/* Public lifecycle interface for the BLE GATT OTA role. */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

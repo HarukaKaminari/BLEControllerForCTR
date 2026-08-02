@@ -1,3 +1,15 @@
+/*
+ * Application entrypoint.
+ *
+ * This file intentionally contains orchestration only. OTA transport,
+ * central-mode scanning, startup-trigger sampling, and RGB rendering are
+ * implemented in independent modules so changing one concern does not force
+ * unrelated business logic into this file.
+ *
+ * Startup selects exactly one mutually exclusive operating mode:
+ *   1. OTA mode when the active-low trigger is held for two seconds;
+ *   2. normal mode, which scans for a BLE HID controller.
+ */
 /* Blink Example
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -10,6 +22,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "ble_ota.h"
+#include "ble_central.h"
 #include "ota_trigger.h"
 #include "status_led.h"
 
@@ -39,6 +52,9 @@
  */
 void app_main(void)
 {
+    /* NVS is required by the Bluetooth stack for persistent configuration,
+     * pairing data, and related host state. A full/old partition is repaired
+     * using the documented erase-and-reinitialize sequence. */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -46,9 +62,12 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    /* Blue is the initial power/status indication while the trigger is being
+     * sampled and before the selected role changes the LED state. */
     status_led_set(STATUS_LED_BLUE);
 
     if (ota_trigger_is_held()) {
+        /* OTA owns the complete application lifetime in this boot. */
         ble_ota_init();
 
         /* BLE OTA owns startup until the client finishes the update. */
@@ -56,6 +75,11 @@ void app_main(void)
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
+
+    /* Normal operation starts the asynchronous central-role workflow. It will
+     * either turn green after connection or shut down and deep-sleep after its
+     * 30-second deadline. */
+    ble_central_init();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));

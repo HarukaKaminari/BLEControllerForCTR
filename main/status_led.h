@@ -1,6 +1,14 @@
 #ifndef STATUS_LED_H
 #define STATUS_LED_H
 
+/*
+ * Public RGB status LED contract.
+ *
+ * The implementation owns initialization, the addressable LED peripheral,
+ * and the background blink task. Callers only describe the desired indication
+ * through the functions below.
+ */
+
 #include <stdint.h>
 
 #ifdef __cplusplus

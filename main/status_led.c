@@ -1,3 +1,12 @@
+/*
+ * status_led.c
+ *
+ * Hardware owner for the board's single addressable RGB LED. Other modules
+ * request an indication through status_led_set() or status_led_set_color();
+ * they never access led_strip directly. This keeps LED timing and peripheral
+ * ownership in one place and prevents BLE callbacks from competing with an
+ * application blink loop.
+ */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -5,15 +14,26 @@
 #include "sdkconfig.h"
 #include "status_led.h"
 
+/* Log tag for LED initialization messages. */
 static const char *TAG = "status_led";
+
+/* Hardware and default visual parameters. */
 #define STATUS_LED_GPIO CONFIG_BLINK_GPIO
 #define STATUS_LED_DEFAULT_BLINK_HZ 5.0f
 
+/* Shared LED driver handle and requested output state. */
 static led_strip_handle_t s_strip;
 static volatile uint32_t s_rgb;
 static volatile float s_frequency_hz;
 static bool s_initialized;
 
+/*
+ * Render one frame to the physical LED.
+ *
+ * Colors use 0x00RRGGBB. When on is false, all channels are written as zero,
+ * which is the off value for an addressable LED. led_strip_refresh() is
+ * required after changing the pixel buffer to transmit the frame.
+ */
 static void render(uint32_t rgb, bool on)
 {
     led_strip_set_pixel(s_strip, 0,
@@ -23,6 +43,15 @@ static void render(uint32_t rgb, bool on)
     led_strip_refresh(s_strip);
 }
 
+/*
+ * Background renderer.
+ *
+ * A separate task is used so callers only update the desired state and return
+ * immediately. For a positive frequency, 500/frequency gives the half-period
+ * in milliseconds, because one complete cycle contains an on and an off half.
+ * A non-positive frequency never toggles the output: zero means solid when a
+ * nonzero color is supplied, and a negative value means explicitly off.
+ */
 static void status_led_task(void *arg)
 {
     (void)arg;
@@ -51,6 +80,11 @@ static void status_led_task(void *arg)
     }
 }
 
+/*
+ * Convert a semantic OTA/application state into a generic color/frequency
+ * request. Keeping this mapping here means BLE modules do not need to know the
+ * RGB encoding or timing implementation.
+ */
 void status_led_set(status_led_state_t state)
 {
     static const uint32_t colors[] = {
@@ -73,6 +107,14 @@ void status_led_set(status_led_state_t state)
                              : 0.0f);
 }
 
+/*
+ * Set an arbitrary color and blink rate.
+ *
+ * Initialization is lazy because the public API may be called from either the
+ * startup path or a Bluetooth callback. The first call creates the RMT-backed
+ * LED strip and its renderer task; later calls only replace the volatile
+ * request consumed by that task.
+ */
 void status_led_set_color(uint32_t rgb, float frequency_hz)
 {
     if (!s_initialized) {

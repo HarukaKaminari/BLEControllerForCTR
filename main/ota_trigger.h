@@ -1,6 +1,8 @@
 #ifndef OTA_TRIGGER_H
 #define OTA_TRIGGER_H
 
+/* Public startup-mode selection interface. */
+
 #include <stdbool.h>
 
 #ifdef __cplusplus
